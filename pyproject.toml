@@ -1,0 +1,20 @@
+[project]
+name = "coding-agent-harness"
+version = "0.1.0"
+description = "Deep coding agent harness with human-gated edits, LangGraph, Groq/OpenAI, and E2B"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "langchain>=1.0",
+    "langchain-core>=1.0",
+    "langchain-groq>=0.2.0",
+    "langchain-openai>=0.1.0",
+    "langchain-community>=0.4",
+    "langgraph>=1.0",
+    "e2b>=2.3.4",
+    "streamlit>=1.36.0",
+    "python-dotenv>=1.0.1",
+    "pydantic>=2.7.0",
+    "pytest>=8.0",
+    "rich>=13.9",
+]
