@@ -136,7 +136,3 @@ coding_agent_harness/
 - **GitHub**: [@smitmahajan210](https://github.com/smitmahajan210)
 
 ---
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
