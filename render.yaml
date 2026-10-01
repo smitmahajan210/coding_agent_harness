@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+services:
+  - type: web
+    name: coding-agent-harness
+    runtime: python
+    plan: free
+    buildCommand: uv sync --frozen
+    startCommand: .venv/bin/python -m streamlit run app.py --server.address=0.0.0.0 --server.port=$PORT
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: E2B_API_KEY
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: OPENAI_MODEL
+        value: openai/gpt-oss-120b
+      - key: MAX_ITERATIONS
+        value: "4"
+      - key: PYTHONUNBUFFERED
+        value: "1"

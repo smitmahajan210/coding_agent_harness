@@ -8,7 +8,6 @@ Users have reported three bugs:
 3. The total ignores item quantities.
 """
 
-
 class ShoppingCart:
     def __init__(self):
         self.items = {}  # name -> {"price": float, "quantity": int}
@@ -21,11 +20,16 @@ class ShoppingCart:
             self.items[name] = {"price": price, "quantity": quantity}
 
     def remove_item(self, name):
-        del self.items[name]
+        # Safely remove an item; if it does not exist, do nothing (no‑op)
+        if name in self.items:
+            del self.items[name]
 
     def apply_discount(self, percent):
-        self.discount_percent += percent
+        # Store the most recent discount percent; do not accumulate
+        self.discount_percent = percent
 
     def total(self):
-        subtotal = sum(item["price"] for item in self.items.values())
+        # Calculate subtotal respecting item quantities
+        subtotal = sum(item["price"] * item["quantity"] for item in self.items.values())
+        # Apply discount (if any) and round to two decimal places
         return round(subtotal * (1 - self.discount_percent / 100), 2)

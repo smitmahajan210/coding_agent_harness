@@ -1,371 +1,294 @@
-"""Optional visual review UI for the Coding Agent Harness."""
+"""Paste/upload Python, diagnose it, and review explained fixes before applying."""
 from __future__ import annotations
 
+import hmac
 import os
 import uuid
+from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from demo_data import DEMO_BUGGY_CART, DEMO_DIFF, DEMO_OBJECTIVE
-from graph import DEFAULT_MAX_ITERATIONS, build_graph
+from demo_data import DEMO_BUGGY_CART
+from graph import AUTO_OBJECTIVE, DEFAULT_MAX_ITERATIONS, build_graph
+from review import changed_lines, highlighted_code
+from uploads import create_workspace, files_from_uploads, is_test_file, validate_files, workspace_zip
 
 load_dotenv()
+st.set_page_config(page_title="Code Harness · Understand and fix your code", page_icon="🛠️", layout="wide")
 
-st.set_page_config(
-    page_title="Coding Agent Harness",
-    page_icon="🗂️",
-    layout="wide",
-    initial_sidebar_state="auto",
-)
+app_password = os.getenv("APP_PASSWORD", "")
+if os.getenv("RENDER") and not app_password:
+    st.error("Set APP_PASSWORD in the Render environment settings to enable this demo.")
+    st.stop()
+if app_password and not st.session_state.get("authenticated", False):
+    st.title("Code Harness")
+    with st.form("sign_in", clear_on_submit=True):
+        password = st.text_input("Demo password", type="password")
+        submitted = st.form_submit_button("Sign in")
+    if submitted:
+        if hmac.compare_digest(password.encode("utf-8"), app_password.encode("utf-8")):
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    st.stop()
 
-st.markdown(
-    """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+st.markdown("""
+<style>
+.block-container {max-width: 1240px; padding-top: 2.5rem; padding-bottom: 4rem;}
+h1 {letter-spacing: -.045em;}
+.stButton > button {border-radius: 8px; min-height: 44px;}
+[data-testid="stCodeBlock"] {border: 1px solid #8883; border-radius: 8px;}
+</style>
+""", unsafe_allow_html=True)
 
-    :root {
-        --ink: var(--text-color);
-        --muted: color-mix(in srgb, var(--text-color) 62%, transparent);
-        --line: color-mix(in srgb, var(--text-color) 20%, transparent);
-        --panel: var(--secondary-background-color);
-        --accent: #ff5c5c;
-        --accent-soft: rgba(255, 92, 92, 0.12);
-        --green: #48d597;
-    }
-    html, body, [class*="css"] { font-family: "DM Sans", sans-serif; }
-    code, pre, [data-testid="stCodeBlock"] { font-family: "IBM Plex Mono", monospace; }
-    .block-container { max-width: 1320px; padding-top: 2.6rem; padding-bottom: 4rem; }
-    [data-testid="stSidebar"] { border-right: 1px solid var(--line); }
-    [data-testid="stSidebar"] .block-container { padding-top: 2rem; }
-    h1, h2, h3 { letter-spacing: -0.035em; }
-    .eyebrow {
-        color: var(--accent); font: 500 0.74rem/1 "IBM Plex Mono", monospace;
-        letter-spacing: 0.13em; text-transform: uppercase; margin-bottom: 0.8rem;
-    }
-    .hero-title {
-        color: var(--ink); font-size: clamp(2.4rem, 5vw, 4.6rem); line-height: 0.98;
-        letter-spacing: -0.065em; font-weight: 700; max-width: 900px; margin: 0;
-    }
-    .hero-copy {
-        color: var(--muted); font-size: 1.12rem; line-height: 1.65;
-        max-width: 730px; margin: 1.25rem 0 2rem;
-    }
-    .status-line {
-        display: flex; align-items: center; gap: 0.55rem; color: var(--muted);
-        font: 500 0.78rem/1.4 "IBM Plex Mono", monospace; margin-bottom: 1rem;
-    }
-    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
-    .agent-step {
-        min-height: 118px; padding: 1rem; border-top: 2px solid var(--line);
-        background: linear-gradient(180deg, rgba(255,255,255,0.025), transparent);
-    }
-    .agent-step strong { color: var(--ink); display: block; font-size: 0.95rem; margin: 0.4rem 0; }
-    .agent-step span { color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
-    .agent-step.review { border-color: var(--accent); background: var(--accent-soft); }
-    .step-no { color: var(--muted); font: 500 0.7rem/1 "IBM Plex Mono", monospace; }
-    .ticket {
-        border: 1px solid var(--line); background: var(--panel); padding: 1.2rem 1.3rem;
-        border-radius: 8px; margin-top: 0.25rem;
-    }
-    .ticket-id { color: var(--accent); font: 500 0.72rem/1 "IBM Plex Mono", monospace; }
-    .ticket h3 { font-size: 1.15rem; margin: 0.75rem 0 0.55rem; }
-    .ticket p { color: var(--muted); font-size: 0.88rem; line-height: 1.5; margin: 0; }
-    .failure-row {
-        display: flex; gap: 0.75rem; align-items: flex-start; padding: 0.8rem 0;
-        border-bottom: 1px solid var(--line); color: var(--ink); font-size: 0.87rem;
-    }
-    .failure-row:last-child { border-bottom: 0; }
-    .failure-mark { color: var(--accent); font-family: "IBM Plex Mono", monospace; }
-    div[data-testid="stMetric"] {
-        border-top: 1px solid var(--line); padding-top: 0.8rem;
-    }
-    div[data-testid="stMetric"] label { color: var(--muted); }
-    div[data-testid="stMetricValue"] {
-        font-family: "IBM Plex Mono", monospace; font-size: 1.65rem;
-        white-space: nowrap; overflow: visible;
-    }
-    .stButton > button { border-radius: 6px; min-height: 46px; font-weight: 600; }
-    div[data-testid="stCodeBlock"] { border: 1px solid var(--line); border-radius: 7px; }
-    div[data-testid="stTabs"] button { font-weight: 600; }
-    .sidebar-brand { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.03em; }
-    .sidebar-copy { color: var(--muted); font-size: 0.86rem; line-height: 1.55; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# The graph and checkpointer must survive Streamlit reruns. A fresh
-# InMemorySaver would silently drop every checkpoint at the review gate.
+for key, value in {
+    "thread_id": str(uuid.uuid4()), "run_started": False,
+    "pending_review": None, "final_state": None, "run_error": None,
+    "workspace_handle": None,
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 if "graph" not in st.session_state:
-    st.session_state.checkpointer = InMemorySaver()
-    st.session_state.graph = build_graph(checkpointer=st.session_state.checkpointer)
-if "thread_id" not in st.session_state:
-    st.session_state.thread_id = str(uuid.uuid4())
-if "run_started" not in st.session_state:
-    st.session_state.run_started = False
-if "pending_review" not in st.session_state:
-    st.session_state.pending_review = None
-if "final_state" not in st.session_state:
-    st.session_state.final_state = None
+    st.session_state.graph = build_graph(InMemorySaver())
 
-config = {"configurable": {"thread_id": st.session_state.thread_id}}
 missing = []
-if not (os.getenv("NEBIUS_API_KEY") or os.getenv("OPENAI_API_KEY")):
-    missing.append("NEBIUS_API_KEY or OPENAI_API_KEY")
+if not (os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("NEBIUS_API_KEY")):
+    missing.append("GROQ_API_KEY or OPENAI_API_KEY")
 if not os.getenv("E2B_API_KEY"):
     missing.append("E2B_API_KEY")
 
 
-def drive(invoke_arg) -> None:
-    """Invoke or resume the graph and capture an interrupt or final state."""
-    with st.spinner("Crew is exploring the repo and preparing a patch…"):
-        result = st.session_state.graph.invoke(invoke_arg, config)
-    if "__interrupt__" in result:
-        st.session_state.pending_review = result["__interrupt__"][0].value
-        st.session_state.final_state = None
-    else:
-        st.session_state.pending_review = None
-        st.session_state.final_state = result
+def graph_config():
+    return {"configurable": {"thread_id": st.session_state.thread_id}, "recursion_limit": 100}
 
 
-def reset_run() -> None:
-    """Start a fresh checkpoint thread without touching the demo workspace."""
+def reset_run():
+    handle = st.session_state.workspace_handle
+    if handle:
+        handle.cleanup()
+    st.session_state.workspace_handle = None
     st.session_state.thread_id = str(uuid.uuid4())
+    st.session_state.graph = build_graph(InMemorySaver())
     st.session_state.run_started = False
     st.session_state.pending_review = None
     st.session_state.final_state = None
+    st.session_state.run_error = None
+
+
+def drive(invoke_arg):
+    st.session_state.run_error = None
+    labels = {
+        "baseline": "Initial checks complete. Understanding what happened…",
+        "planner": "Reading your files and explaining the problem…",
+        "explorer": "Preparing a suggested fix for your review…",
+        "coder": "Code review complete…",
+        "apply_diffs": "Your approved changes are saved. Checking them again…",
+        "tester": "Verification complete…",
+    }
+    try:
+        with st.status("Checking your code in an isolated environment…", expanded=True) as progress:
+            pending = None
+            for update in st.session_state.graph.stream(invoke_arg, graph_config(), stream_mode="updates"):
+                if update.get("__interrupt__"):
+                    pending = update["__interrupt__"][0].value
+                else:
+                    for node in update:
+                        if node in labels:
+                            progress.update(label=labels[node])
+            st.session_state.pending_review = pending
+            snapshot = st.session_state.graph.get_state(graph_config()).values
+            st.session_state.final_state = None if pending else snapshot
+            progress.update(label="Ready for your review" if pending else "Analysis complete", state="complete")
+    except Exception as exc:
+        # A failed API request must not strand the interface or expose a traceback.
+        message = str(exc)
+        if "429" in message or "rate_limit" in message.lower():
+            explanation = "The AI provider's usage limit was reached. Wait a little, then retry this step."
+        elif "401" in message or "authentication" in message.lower():
+            explanation = "The service could not sign in. Check the configured API keys."
+        elif "model_not_found" in message:
+            explanation = "The selected AI model is unavailable. Choose an available model in the app configuration."
+        else:
+            explanation = "The analysis could not finish. Retry this step, or start a new analysis."
+        st.session_state.run_error = explanation
+        # Keep the checkpoint, workspace, and any completed approvals available.
+
+
+def render_checks(result: dict, title: str):
+    if not result:
+        return
+    st.markdown(f"**{title}**")
+    if result.get("infrastructure_error"):
+        st.warning(result["summary"])
+    elif result.get("passed"):
+        st.success(result["summary"])
+    else:
+        st.warning(result["summary"])
+    if result.get("limitations"):
+        st.caption(result["limitations"])
+    with st.expander("Check details"):
+        st.code(result.get("stdout") or "No output was produced.", language="text")
 
 
 with st.sidebar:
-    st.markdown('<div class="sidebar-brand">Code Harness</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<p class="sidebar-copy">A coding crew with a hard boundary: the model '
-        "can propose code, but only you can apply it.</p>",
-        unsafe_allow_html=True,
-    )
-    st.divider()
-
-    run_label = "Awaiting your review" if st.session_state.pending_review else (
-        "Run in progress" if st.session_state.run_started and not st.session_state.final_state
-        else "Ready for a ticket"
-    )
-    st.markdown(
-        f'<div class="status-line"><span class="status-dot"></span>{run_label}</div>',
-        unsafe_allow_html=True,
-    )
+    st.title("Code Harness")
+    st.caption("Understand the problem. Review the fix. Keep control.")
     if missing:
-        st.error(f"Add to `.env`: {', '.join(missing)}")
+        st.warning("Configure " + ", ".join(missing) + " to analyze code.")
     else:
-        st.success("LLM + E2B connected")
-    active_model = os.getenv('NEBIUS_MODEL') or os.getenv('OPENAI_MODEL') or os.getenv('MODEL') or 'llama-3.3-70b-versatile'
-    st.caption(f"Model · `{active_model}`")
-    st.caption(f"Thread · `{st.session_state.thread_id[:8]}`")
-
-    st.divider()
-    st.markdown("**Safety boundary**")
-    st.caption("The coder has no file-write tool. Only approved diffs reach `workspace/`.")
-    with st.expander("Reset the sample repo"):
-        st.code("git restore workspace/", language="bash")
-
-st.markdown('<div class="eyebrow">Human-gated coding harness</div>', unsafe_allow_html=True)
-st.markdown(
-    '<h1 class="hero-title">Review AI code before it touches disk.</h1>',
-    unsafe_allow_html=True,
-)
-st.markdown(
-    '<p class="hero-copy">Give a four-agent crew a real bug ticket. It can inspect, '
-    "plan, and propose a patch, but execution stops at a review gate you control. "
-    "Approve good code, reject weak code with a reason, then verify it in an isolated sandbox.</p>",
-    unsafe_allow_html=True,
-)
-
-metric_1, metric_2, metric_3, metric_4 = st.columns(4)
-metric_1.metric("Seeded test suite", "3 failing")
-metric_2.metric("Files in scope", "1 of 2")
-metric_3.metric("Approval gates", "Every diff")
-metric_4.metric("Test environment", "E2B sandbox")
-
-st.markdown("### The handoff")
-steps = [
-    ("01", "Planner", "Turns the ticket into a scoped implementation plan."),
-    ("02", "Explorer", "Reads the real workspace and finds the failure points."),
-    ("03", "Coder", "Produces a unified diff. It cannot write the file."),
-    ("04", "You", "Approve the patch or reject it with precise feedback."),
-    ("05", "Tester", "Runs pytest in E2B and loops back if anything fails."),
-]
-for column, (number, title, copy) in zip(st.columns(5), steps):
-    review_class = " review" if title == "You" else ""
-    column.markdown(
-        f'<div class="agent-step{review_class}"><div class="step-no">{number}</div>'
-        f"<strong>{title}</strong><span>{copy}</span></div>",
-        unsafe_allow_html=True,
-    )
-
-st.divider()
-run_col, ticket_col = st.columns([1.65, 1], gap="large")
-with run_col:
-    st.markdown("### Run the seeded ticket")
-    objective = st.text_area(
-        "Ticket objective",
-        value=DEMO_OBJECTIVE,
-        height=126,
-        help="The sample workspace intentionally starts with three bugs.",
-    )
-    action_col, reset_col = st.columns([1.6, 1])
-    with action_col:
-        start_clicked = st.button(
-            "Start agent run",
-            type="primary",
-            disabled=st.session_state.run_started or bool(missing),
-            use_container_width=True,
-        )
-    with reset_col:
-        if st.button("New thread", use_container_width=True):
+        st.success("Ready to analyze")
+    st.caption("Python projects · up to 40 files / 500 KB of code")
+    st.caption("Code is sent to the configured AI provider and E2B for analysis and isolated execution.")
+    if st.session_state.run_started:
+        if st.button("Start a new analysis", use_container_width=True):
             reset_run()
             st.rerun()
-    if missing:
-        st.caption("Add both API keys to `.env` to enable the live run. The demo below works without them.")
-
-with ticket_col:
-    st.markdown(
-        """
-        <div class="ticket">
-            <div class="ticket-id">CART-104 · BUG</div>
-            <h3>Cart totals are wrong in production</h3>
-            <p>Fix implementation behavior without changing the contract encoded by the tests.</p>
-            <div class="failure-row"><span class="failure-mark">FAIL</span><span>Quantity 3 × $2.50 returns $2.50, expected $7.50</span></div>
-            <div class="failure-row"><span class="failure-mark">FAIL</span><span>Removing a missing SKU raises KeyError</span></div>
-            <div class="failure-row"><span class="failure-mark">FAIL</span><span>Applying 10% twice becomes a 20% discount</span></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-if start_clicked and objective.strip():
-    st.session_state.run_started = True
-    drive(
-        {
-            "objective": objective.strip(),
-            "iteration": 0,
-            "max_iterations": int(os.getenv("MAX_ITERATIONS", DEFAULT_MAX_ITERATIONS)),
-        }
-    )
-    st.rerun()
-
-# Live progress and review gate appear directly below the ticket once a run starts.
-if st.session_state.run_started:
     st.divider()
-    st.markdown("## Live run")
-    snapshot = st.session_state.graph.get_state(config)
-    values = snapshot.values if snapshot else {}
-    if values.get("plan"):
-        with st.expander("Implementation plan", expanded=True):
-            st.markdown(values["plan"])
-    for test_result in values.get("test_results", []):
-        with st.expander(
-            f"Test run · iteration {test_result['iteration']} · {test_result['summary']}",
-            expanded=False,
-        ):
-            st.code(test_result["stdout"], language="text")
+    st.markdown("**What can be checked?**")
+    st.caption("Python syntax, existing tests, and a script you choose to run. Programs requiring interactive input or a running web server need a test suite instead.")
+    st.caption("Each analysis has its own temporary workspace. Download your result before starting over or leaving the session.")
 
-if st.session_state.pending_review:
-    payload = st.session_state.pending_review
-    st.warning("Execution paused. Nothing below has been written to disk.")
-    st.subheader(f"Review proposed changes · iteration {payload['iteration'] + 1}")
-    decisions = {}
-    for diff in payload["diffs"]:
-        with st.expander(f"{diff['file_path']} · {diff['rationale']}", expanded=True):
-            st.code(diff["unified_diff"], language="diff")
-            action = st.radio(
-                "Decision",
-                options=["approve", "reject"],
-                format_func=lambda value: "Approve patch" if value == "approve" else "Request changes",
-                key=f"decision_{diff['diff_id']}",
-                horizontal=True,
-            )
-            reason = ""
-            if action == "reject":
-                reason = st.text_input(
-                    "What should the coder change?",
-                    placeholder="Example: preserve the public method signature",
-                    key=f"reason_{diff['diff_id']}",
+st.title("Understand and fix your code")
+st.write("Add your Python code. We’ll check it, explain what went wrong in everyday language, and suggest a fix for you to approve.")
+st.caption("No bug ticket required. If the intended behavior is unclear, we’ll explain what still needs to be clarified.")
+
+files = {}
+entrypoint = ""
+context = ""
+if not st.session_state.run_started:
+    st.subheader("1. Add your code")
+    source = st.radio("How would you like to add code?", ["Paste code", "Upload files", "Try an example"], horizontal=True)
+    validation_error = None
+    if source == "Paste code":
+        filename = st.text_input("File name", value="main.py")
+        content = st.text_area("Your Python code", height=280, placeholder="Paste your Python code here…")
+        if content.strip():
+            try:
+                files = validate_files({filename: content})
+            except ValueError as exc:
+                validation_error = str(exc)
+    elif source == "Upload files":
+        uploaded = st.file_uploader("Python files or a ZIP project", type=["py", "zip", "txt"], accept_multiple_files=True)
+        st.caption("Include existing tests if you have them. A root requirements.txt can list extra packages. ZIP folder structure is preserved; other file types and hidden files are skipped.")
+        if uploaded:
+            try:
+                files = files_from_uploads([(item.name, item.getvalue()) for item in uploaded])
+            except ValueError as exc:
+                validation_error = str(exc)
+    else:
+        files = {
+            "cart.py": DEMO_BUGGY_CART,
+            "tests/test_cart.py": (Path(__file__).parent / "workspace/tests/test_cart.py").read_text(),
+        }
+        st.info("A shopping cart example with existing tests. The app will discover the failures itself.")
+        with st.expander("View example code"):
+            st.code(DEMO_BUGGY_CART, language="python")
+    if validation_error:
+        st.error(validation_error)
+    if files:
+        st.caption(f"{len(files)} file(s) ready: " + ", ".join(files))
+        candidates = [name for name in files if name.endswith(".py") and not is_test_file(name) and Path(name).name != "__init__.py"]
+        has_tests = any(is_test_file(name) and Path(name).name != "conftest.py" for name in files)
+        default = 1 if len(candidates) == 1 and not has_tests else 0
+        choice = st.selectbox("Also run a program?", ["Checks only"] + candidates, index=default,
+                              help="Existing tests are discovered automatically. A selected script runs once without keyboard input, in E2B.")
+        entrypoint = "" if choice == "Checks only" else choice
+    with st.expander("Anything else we should know? (optional)"):
+        context = st.text_area("What should the program do, or what did you notice?", placeholder="For example: this should add up the prices in my shopping list.")
+        st.caption("You don’t need to identify the bug. This context helps only when the intended result cannot be inferred from code or tests.")
+    if st.button("Analyze code", type="primary", disabled=not files or bool(missing) or bool(validation_error)):
+        try:
+            handle = create_workspace(files)
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            st.session_state.workspace_handle = handle
+            st.session_state.run_started = True
+            drive({
+                "objective": AUTO_OBJECTIVE + ("\nUser context: " + context if context.strip() else ""),
+                "workspace_root": handle.name, "automatic": True, "entrypoint": entrypoint,
+                "iteration": 0, "max_iterations": DEFAULT_MAX_ITERATIONS,
+            })
+            st.rerun()
+
+if st.session_state.run_started:
+    state = st.session_state.graph.get_state(graph_config()).values
+    if st.session_state.run_error:
+        st.error(st.session_state.run_error)
+        if st.button("Retry this step"):
+            # None resumes from the failed checkpoint without repeating completed nodes.
+            drive(None)
+            st.rerun()
+    st.subheader("2. What we found")
+    render_checks(state.get("baseline", {}), "Before any changes")
+    if state.get("diagnosis"):
+        st.markdown(state["diagnosis"])
+    if state.get("proposal_summary"):
+        st.markdown("**Suggested next step**")
+        st.markdown(state["proposal_summary"])
+
+    review_area = st.empty()
+    if st.session_state.pending_review and not st.session_state.run_error:
+        with review_area.container():
+            st.subheader("3. Review the suggested fix")
+            st.info("These are suggestions. Your working copy changes only after you approve. The original upload on your computer stays unchanged.")
+            payload = st.session_state.pending_review
+            st.caption(f"{len(payload['diffs'])} file(s) to review. Each proposal includes all suggested changes for that file—not one approval per line.")
+            decisions = {}
+            for diff in payload["diffs"]:
+                st.markdown(f"**{diff['file_path']}**")
+                st.write(diff["rationale"])
+                changes = changed_lines(diff["old_content"], diff["new_content"])
+                st.caption(
+                    f"{len(changes['after'])} added/changed line(s) · "
+                    f"{len(changes['before'])} removed/replaced line(s) · "
+                    f"{changes['blocks']} change block(s). Green + = suggested change; red − = replaced or removed."
                 )
-            decisions[diff["diff_id"]] = {"action": action, "reason": reason}
+                before, after = st.columns(2)
+                with before:
+                    st.caption("Current code")
+                    st.html(highlighted_code(diff["old_content"], changes["before"], side="before"))
+                with after:
+                    st.caption("Suggested code — not applied yet")
+                    st.html(highlighted_code(diff["new_content"], changes["after"], side="after"))
+                with st.expander("Copy full suggested code"):
+                    st.code(diff["new_content"], language="python")
+                with st.expander("Show exact differences"):
+                    st.code(diff["unified_diff"], language="diff")
+                action = st.radio("Your decision", ["Choose an option", "Approve this change", "Request a different fix"],
+                                  key=f"decision_{diff['diff_id']}", horizontal=True)
+                reason = ""
+                if action == "Request a different fix":
+                    reason = st.text_input("What would you like done differently?", key=f"reason_{diff['diff_id']}",
+                                           placeholder="You can describe this in everyday words.")
+                decisions[diff["diff_id"]] = {"action": {"Choose an option": "pending", "Approve this change": "approve", "Request a different fix": "reject"}[action], "reason": reason}
+            if st.button("Approve all suggested changes", type="primary"):
+                approvals = {d["diff_id"]: {"action": "approve", "reason": ""} for d in payload["diffs"]}
+                drive(Command(resume={"decisions": approvals}))
+                st.rerun()
+            if st.button("Apply my decisions and check again", type="primary", disabled=any(d["action"] == "pending" for d in decisions.values())):
+                drive(Command(resume={"decisions": decisions}))
+                st.rerun()
 
-    if st.button("Submit review and resume", type="primary"):
-        drive(Command(resume={"decisions": decisions}))
-        st.rerun()
+    for result in state.get("test_results", []):
+        render_checks(result, f"After review {result['iteration']}")
 
-if st.session_state.final_state:
-    state = st.session_state.final_state
-    if state.get("last_test_passed"):
-        st.success(f"All 5 tests pass after {state.get('iteration', 0)} iteration(s).")
-    else:
-        st.error(
-            f"Stopped after {state.get('iteration', 0)} iteration(s); tests still fail. "
-            "Start a new run or raise MAX_ITERATIONS."
-        )
-    if state.get("applied_diffs"):
-        st.subheader("Applied diffs")
-        for diff in state["applied_diffs"]:
-            with st.expander(
-                f"{diff['file_path']} · iteration {diff['iteration'] + 1} · {diff['rationale']}"
-            ):
-                st.code(diff["unified_diff"], language="diff")
-
-st.divider()
-st.markdown("## See the use case before spending a token")
-st.caption("This preview uses the real seeded bug and representative patch. It never invokes a model or changes a file.")
-
-workspace_tab, review_tab, contract_tab = st.tabs(
-    ["Buggy workspace", "Review-gate preview", "Safety contract"]
-)
-
-with workspace_tab:
-    source_col, failures_col = st.columns([1.25, 1], gap="large")
-    with source_col:
-        st.markdown("#### `workspace/cart.py`")
-        st.code(DEMO_BUGGY_CART, language="python", line_numbers=True)
-    with failures_col:
-        st.markdown("#### Baseline: 3 failed, 2 passed")
-        st.code(
-            """FAILED test_total_respects_quantity
-  assert 2.5 == 7.5
-
-FAILED test_remove_missing_item_is_noop
-  KeyError: 'banana'
-
-FAILED test_discount_applied_once
-  assert 8.0 == 9.0
-
-3 failed, 2 passed in 0.05s""",
-            language="text",
-        )
-
-with review_tab:
-    st.markdown("#### Proposed patch · `cart.py`")
-    st.caption("The graph would pause here. The workspace is still unchanged.")
-    st.code(DEMO_DIFF, language="diff", line_numbers=True)
-    preview_choice = st.radio(
-        "Your decision",
-        ["Approve patch", "Request changes"],
-        horizontal=True,
-        key="preview_decision",
-    )
-    if preview_choice == "Request changes":
-        st.text_input(
-            "Feedback sent back to the coder",
-            value="Keep remove_item as a silent no-op and preserve the public API.",
-        )
-        st.info("The coder receives this constraint and must propose a new diff. No code is applied.")
-    else:
-        st.success("Next: apply this diff, run all 5 tests in E2B, and loop back if one fails.")
-
-with contract_tab:
-    contract_1, contract_2, contract_3 = st.columns(3)
-    contract_1.markdown("**Model proposes**\n\nThe coder returns complete file content, which is converted into a unified diff.")
-    contract_2.markdown("**Human authorizes**\n\nLangGraph interrupts before the only node that can write to the workspace.")
-    contract_3.markdown("**Sandbox verifies**\n\nApproved code is copied into E2B and tested away from the host machine.")
+    final = st.session_state.final_state
+    if final:
+        if final.get("status") == "done":
+            st.success("Your approved changes passed the selected checks.")
+        elif final.get("status") == "reviewed":
+            st.info("Review finished. No additional changes were proposed. Read the findings and check limitations above.")
+        elif final.get("status") == "blocked":
+            st.warning("Checks could not finish. Review the check details above; this is not a confirmed code defect.")
+        else:
+            st.warning("Some issues or questions remain. The explanation above describes what still needs attention.")
+    handle = st.session_state.workspace_handle
+    if handle and (final or state.get("applied_diffs")):
+        st.download_button("Download current code (.zip)", data=workspace_zip(Path(handle.name)),
+                           file_name="reviewed-code.zip", mime="application/zip")
+        st.caption("Includes only the current working copy and changes you approved. Unapproved suggestions are excluded.")

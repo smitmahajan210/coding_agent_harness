@@ -262,10 +262,12 @@ def run_live(console: Console, args: argparse.Namespace) -> int:
     if not args.skip_baseline:
         run_baseline(console)
 
-    has_llm_key = bool(os.getenv("NEBIUS_API_KEY") or os.getenv("OPENAI_API_KEY"))
+    has_llm_key = bool(
+        os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("NEBIUS_API_KEY")
+    )
     missing = []
     if not has_llm_key:
-        missing.append("NEBIUS_API_KEY or OPENAI_API_KEY")
+        missing.append("GROQ_API_KEY or OPENAI_API_KEY")
     if not os.getenv("E2B_API_KEY"):
         missing.append("E2B_API_KEY")
     if missing:
