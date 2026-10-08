@@ -63,29 +63,19 @@ def test_dashboard_accepts_groq_key_without_openai_key(monkeypatch):
     assert not start.disabled
 
 
-def test_render_requires_a_demo_password(monkeypatch):
+@pytest.mark.parametrize("legacy_password", [None, "old-demo-password"])
+def test_render_opens_dashboard_directly(monkeypatch, legacy_password):
     monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setenv("E2B_API_KEY", "test-e2b-key")
+    if legacy_password is not None:
+        monkeypatch.setenv("APP_PASSWORD", legacy_password)
     app = AppTest.from_file(str(PROJECT_ROOT / "app.py")).run(timeout=20)
 
     assert not app.exception
-    assert "APP_PASSWORD" in app.error[0].value
-    assert not app.button
-
-
-def test_dashboard_password_blocks_access_until_correct(monkeypatch):
-    monkeypatch.setenv("RENDER", "true")
-    monkeypatch.setenv("APP_PASSWORD", "test-demo-password")
-    app = AppTest.from_file(str(PROJECT_ROOT / "app.py")).run(timeout=20)
-    assert not app.exception
-    assert [button.label for button in app.button] == ["Sign in"]
-
-    app.text_input[0].input("wrong-password")
-    app.button[0].click().run(timeout=20)
-    assert not app.exception
-    assert app.error[0].value == "Incorrect password."
-    assert [button.label for button in app.button] == ["Sign in"]
-
-    app.text_input[0].input("test-demo-password")
-    app.button[0].click().run(timeout=20)
-    assert not app.exception
-    assert any(button.label == "Analyze code" for button in app.button)
+    assert any(title.value == "Understand and fix your code" for title in app.title)
+    assert not any(field.label == "Demo password" for field in app.text_input)
+    assert not any(button.label == "Sign in" for button in app.button)
+    app.radio[0].set_value("Try an example").run()
+    start = next(button for button in app.button if button.label == "Analyze code")
+    assert not start.disabled

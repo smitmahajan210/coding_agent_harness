@@ -92,10 +92,9 @@ If no supported fix is found, the dashboard finishes with its findings and any u
    OPENAI_MODEL="openai/gpt-oss-120b"
    E2B_API_KEY="your_e2b_api_key"
    MAX_ITERATIONS="4"
-   APP_PASSWORD=""
    ```
 
-   Create the model key in [Groq Console](https://console.groq.com/keys) and the sandbox key in the [E2B dashboard](https://console.e2b.dev). Both are required for live runs; preview mode needs neither. Keep `.env` local—it is ignored by Git. `APP_PASSWORD` is optional locally and required for the Render deployment below.
+   Create the model key in [Groq Console](https://console.groq.com/keys) and the sandbox key in the [E2B dashboard](https://console.e2b.dev). Both are required for live runs; preview mode needs neither. Keep `.env` local—it is ignored by Git.
 
    To use the existing OpenAI adapter instead, remove `GROQ_API_KEY`, set `OPENAI_API_KEY`, and choose an appropriate `OPENAI_MODEL`. Remove any Groq-specific `OPENAI_API_BASE` or `OPENAI_BASE_URL` from an older configuration.
 
@@ -144,16 +143,15 @@ The repository includes a [Render Blueprint](render.yaml). It installs the exact
 
 1. Commit and push these files to your GitHub repository, including `render.yaml`, `.python-version`, `.streamlit/config.toml`, `pyproject.toml`, and `uv.lock`.
 2. In the [Render dashboard](https://dashboard.render.com), choose **New → Blueprint** and connect this repository. Use the repository root and the `render.yaml` Blueprint.
-3. Enter the three prompted values:
+3. Enter the two prompted values:
 
    | Variable | Value |
    | --- | --- |
    | `GROQ_API_KEY` | Your Groq API key |
    | `E2B_API_KEY` | Your E2B API key |
-   | `APP_PASSWORD` | A password you choose for signing in to the hosted demo |
 
 4. Apply the Blueprint and wait for the build and deployment to finish.
-5. Open the service's `onrender.com` URL, sign in with `APP_PASSWORD`, and start a run.
+5. Open the service's `onrender.com` URL. The dashboard opens directly; no demo password is needed.
 
 The Blueprint sets `OPENAI_MODEL=openai/gpt-oss-120b` and `MAX_ITERATIONS=4` automatically. API keys belong in Render's environment settings, not in the YAML file.
 
@@ -172,7 +170,7 @@ Set the same environment variables listed above. The Streamlit configuration dis
 - The Blueprint selects Render's free instance type. Free services can sleep when idle; the first visit may take time to start. Groq and E2B usage is billed or limited separately by those providers.
 - Dashboard analyses use separate temporary workspaces and graph checkpoints. API quotas remain shared across users.
 - Checkpoints are in memory, and uploads/edits are on Render's ephemeral filesystem. A restart, redeployment, or expired session can discard them. Download results before starting a new analysis or leaving the session.
-- `APP_PASSWORD` protects access to the hosted demo. Share that password with reviewers instead of sharing API keys.
+- The dashboard is public: visitors can run analyses using the server-configured API keys. Keys stay in private environment settings. An old `APP_PASSWORD` variable is ignored and can be removed from Render.
 
 See [Render Blueprints](https://render.com/docs/infrastructure-as-code), [uv support](https://render.com/docs/uv-version), and [free service limits](https://render.com/docs/free).
 

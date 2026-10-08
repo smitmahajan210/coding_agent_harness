@@ -12,8 +12,6 @@ services:
         sync: false
       - key: E2B_API_KEY
         sync: false
-      - key: APP_PASSWORD
-        sync: false
       - key: OPENAI_MODEL
         value: openai/gpt-oss-120b
       - key: MAX_ITERATIONS

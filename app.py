@@ -1,7 +1,6 @@
 """Paste/upload Python, diagnose it, and review explained fixes before applying."""
 from __future__ import annotations
 
-import hmac
 import os
 import uuid
 from pathlib import Path
@@ -18,23 +17,6 @@ from uploads import create_workspace, files_from_uploads, is_test_file, validate
 
 load_dotenv()
 st.set_page_config(page_title="Code Harness · Understand and fix your code", page_icon="🛠️", layout="wide")
-
-app_password = os.getenv("APP_PASSWORD", "")
-if os.getenv("RENDER") and not app_password:
-    st.error("Set APP_PASSWORD in the Render environment settings to enable this demo.")
-    st.stop()
-if app_password and not st.session_state.get("authenticated", False):
-    st.title("Code Harness")
-    with st.form("sign_in", clear_on_submit=True):
-        password = st.text_input("Demo password", type="password")
-        submitted = st.form_submit_button("Sign in")
-    if submitted:
-        if hmac.compare_digest(password.encode("utf-8"), app_password.encode("utf-8")):
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("Incorrect password.")
-    st.stop()
 
 st.markdown("""
 <style>
